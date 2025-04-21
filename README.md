@@ -76,6 +76,8 @@ Alternatively, prefix commands with `poetry run`:
 poetry run goscli <command> [OPTIONS] [ARGUMENTS]
 ```
 
+![Screenshot 2025-04-21 235001](https://github.com/user-attachments/assets/8c904de7-98bb-45e4-b691-e0c033723d07)
+
 ### Commands
 
 *   **Interactive Chat Mode (`chat` or no command):**
