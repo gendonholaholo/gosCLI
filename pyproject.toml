@@ -1,0 +1,51 @@
+[tool.poetry]
+name = "goscli"
+version = "0.1.0"
+description = "CLI tool leveraging GPT-4o mini for code analysis and interaction."
+authors = ["fafaghaws@live.com"]
+readme = "README.md"
+packages = [{include = "goscli"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+typer = {extras = ["rich"], version = "^0.12.3"}
+openai = "^1.35.10"
+python-dotenv = "^1.0.1"
+rich = "^13.7.1"
+tenacity = "^8.5.0"
+diskcache = "^5.6.3"
+tiktoken = "^0.7.0"
+pyyaml = "^6.0.2"
+aiofiles = "^24.1.0"
+groq = "^0.22.0"
+shell = "^1.0.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.2"
+pytest-mock = "^3.12.0"
+ruff = "^0.4.4"
+mypy = "^1.10.0"
+# typer-cli = "^0.0.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+# Allows running 'goscli' directly after 'poetry install'
+goscli = "goscli.main:app"
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "W", "I", "C90"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+files = ["goscli", "tests"]
