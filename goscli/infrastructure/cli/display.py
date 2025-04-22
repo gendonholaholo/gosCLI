@@ -267,7 +267,7 @@ class ConsoleDisplay(UserInterface):
             self.console.print(f"Session ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     def display_chat_history(self, history: List[Any], **kwargs: Any) -> None:
-        """Displays the chat history with numbered messages.
+        """Displays the chat history with enhanced styling.
         
         Args:
             history: List of chat message objects
@@ -341,17 +341,96 @@ class ConsoleDisplay(UserInterface):
             self.display_error(f"Could not display chat history: {e}")
 
     def display_thinking(self, **kwargs: Any) -> None:
-        """Displays a 'thinking' message to indicate the AI is processing.
+        """Displays a 'thinking' indicator while the AI is processing.
         
         Args:
-            **kwargs: Additional display options
+            **kwargs: Additional display options like message
         """
-        logger.debug("Displaying thinking indicator")
-        thinking_message = "Thinking..."
+        logger.debug(f"Displaying thinking indicator with kwargs: {kwargs}")
+        message = kwargs.get("message", "Thinking...")
         try:
-            self.display_output(thinking_message, title="AI", message_type="thinking")
+            self.display_output(message, title="AI", message_type="thinking")
             logger.debug("Thinking indicator displayed successfully")
         except Exception as e:
-            logger.error(f"Error displaying thinking indicator: {e}")
+            logger.error(f"Error displaying thinking indicator: {e}", exc_info=True)
             # Fallback to simple text
-            self.console.print("\nAI is thinking...\n") 
+            self.console.print(f"\nAI is {message}\n")
+
+    def ask_yes_no_question(self, question: str) -> bool:
+        """Asks a yes/no question and returns the answer.
+        
+        Args:
+            question: The question to ask
+            
+        Returns:
+            True if the answer is yes, False otherwise
+        """
+        logger.debug(f"Asking yes/no question: {question}")
+        
+        try:
+            # Create a styled panel for the question
+            panel = Panel(
+                Text(f"{question} (y/n)", style="white"),
+                title="[bold yellow]Question[/bold yellow]",
+                border_style="yellow",
+                box=ROUNDED,
+                padding=(0, 1)
+            )
+            
+            # Print the question panel
+            self.console.print(panel)
+            
+            # Get user input
+            response = self.console.input("[bold yellow]> [/bold yellow]").strip().lower()
+            
+            # Return True for 'y' or 'yes', False otherwise
+            return response in ('y', 'yes')
+            
+        except Exception as e:
+            logger.error(f"Error asking yes/no question: {e}")
+            # Fallback to simple question
+            print(f"\n{question} (y/n)")
+            response = input("> ").strip().lower()
+            return response in ('y', 'yes')
+
+    def ask_diagram_size(self) -> int:
+        """Asks the user to select a size for the Mermaid diagram.
+        
+        Returns:
+            The selected size (width/height in pixels)
+        """
+        logger.debug("Asking for diagram size selection")
+        
+        try:
+            # Create a styled panel with size options
+            panel = Panel(
+                Text("Select diagram size:\n1. Small (1000x1000 pixels)\n2. Medium (2000x2000 pixels)\n3. Large (4000x4000 pixels) [default]", style="white"),
+                title="[bold blue]Diagram Size Selection[/bold blue]",
+                border_style="blue",
+                box=ROUNDED,
+                padding=(0, 1)
+            )
+            
+            # Print the options panel
+            self.console.print(panel)
+            
+            # Get user input
+            response = self.console.input("[bold blue]> [/bold blue]").strip()
+            
+            # Return size based on selection
+            if response == "1":
+                logger.debug("User selected size: 1000x1000")
+                return 1000
+            elif response == "2":
+                logger.debug("User selected size: 2000x2000")
+                return 2000
+            else:
+                # Default to 4000 for any other input including blank
+                logger.debug("User selected size: 4000x4000 (default)")
+                return 4000
+            
+        except Exception as e:
+            logger.error(f"Error asking for diagram size: {e}")
+            # Fallback to default size
+            logger.debug("Error occurred, returning default size (4000)")
+            return 4000 

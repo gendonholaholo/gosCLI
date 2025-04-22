@@ -8,7 +8,7 @@ Implements the ConfigurationProvider interface (or provides static functions).
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Union
 
 try:
     from dotenv import load_dotenv
@@ -35,6 +35,7 @@ ENV_FILE_NAME = ".env"
 # --- Global Configuration Store (Simple Approach) ---
 # A more robust approach might use a dedicated class implementing ConfigurationProvider
 _config: Dict[str, Any] = {}
+_test_config = {}  # For testing purposes
 _loaded = False
 
 def load_configuration(config_file: Path = DEFAULT_CONFIG_FILE, env_file: Optional[Path] = None) -> None:
@@ -50,7 +51,7 @@ def load_configuration(config_file: Path = DEFAULT_CONFIG_FILE, env_file: Option
         config_file: Path to the YAML configuration file.
         env_file: Path to the .env file (searches upwards from cwd if None).
     """
-    global _config, _loaded
+    global _config, _test_config, _loaded
     if _loaded:
         logger.debug("Configuration already loaded.")
         return
@@ -91,42 +92,49 @@ def load_configuration(config_file: Path = DEFAULT_CONFIG_FILE, env_file: Option
     _loaded = True
     logger.info("Configuration loading process completed.")
 
-def get_config(key: str, default: Optional[Any] = None) -> Optional[Any]:
-    """Gets a configuration value by key, checking sources in priority order."""
-    if not _loaded:
-        # Ensure configuration is loaded if accessed directly
-        load_configuration()
-
-    # Check Environment Variables first (standard practice: uppercase)
+def get_config(key: str, default: Any = None) -> Any:
+    """
+    Get a configuration value by key.
+    
+    Priority:
+    1. Test configuration (if in testing mode)
+    2. Environment variable
+    3. YAML config
+    4. Default value
+    
+    Args:
+        key: The configuration key
+        default: Default value if the key is not found
+        
+    Returns:
+        The configuration value
+    """
+    # First check test config
+    if key in _test_config:
+        return _test_config[key]
+    
+    # Then check environment variables (convert to uppercase for env vars)
     env_key = key.upper()
-    env_value = os.getenv(env_key)
-    if env_value is not None:
-        logger.debug(f"Retrieved config key '{key}' (as '{env_key}') from environment variable.")
-        # TODO: Consider type conversion based on key or expected type?
-        return env_value
-
-    # Check _config dictionary (loaded from YAML/Defaults)
-    # Handle nested keys (e.g., 'groq.api_key') using lowercase
-    keys = key.lower().split('.')
-    value = _config
-    try:
-        for k in keys:
-            if isinstance(value, dict):
-                 value = value[k]
+    if env_key in os.environ:
+        value = os.environ[env_key]
+        # Try to convert common types
+        if value.lower() == 'true':
+            return True
+        elif value.lower() == 'false':
+            return False
+        try:
+            if '.' in value:
+                return float(value)
             else:
-                 # Path doesn't fully exist in dict
-                 value = None
-                 break
-        if value is not None:
-             logger.debug(f"Retrieved config key '{key}' from loaded config (YAML/Defaults).")
-             return value
-    except KeyError:
-        # Key part not found in this branch of the dictionary
-        pass
-    except TypeError:
-        # Tried to index into a non-dictionary value
-        pass
-
+                return int(value)
+        except (ValueError, TypeError):
+            return value
+    
+    # Then check loaded config
+    if key in _config:
+        return _config[key]
+    
+    # Return default if not found
     logger.debug(f"Config key '{key}' not found in environment or loaded config. Returning default: {default}")
     return default
 
@@ -172,25 +180,100 @@ def get_default_model(provider: Optional[str] = None) -> Optional[str]:
     return str(model) if model is not None else None
 
 def set_config(key: str, value: Any) -> None:
-    """Sets a configuration value dynamically at runtime.
+    """Sets a configuration value by key.
     
     Args:
-        key: The configuration key using dot notation
-        value: The value to set
+        key: Configuration key (e.g., 'logging.level')
+        value: Value to set
     """
-    global _config, _loaded
+    logger.debug(f"Setting config: {key} = {value}, type: {type(value)}")
     
-    if not _loaded:
-        logger.warning("set_config called before configuration was loaded.")
-        load_configuration()
+    # Monitor specific settings related to Indonesian language support
+    if key == "indonesian" or key == "localization.use_indonesian":
+        logger.info(f"Setting indonesian language flag to: {value}")
+    elif key == "cot_in_english" or key == "localization.cot_in_english":
+        logger.info(f"Setting Chain of Thought in English flag to: {value}")
     
+    # Normalize legacy key names
+    if key == "localization.use_indonesian":
+        key = "indonesian"
+        logger.debug(f"Normalized legacy key 'localization.use_indonesian' to 'indonesian'")
+    elif key == "localization.cot_in_english":
+        key = "cot_in_english"
+        logger.debug(f"Normalized legacy key 'localization.cot_in_english' to 'cot_in_english'")
+    
+    # Store in memory
     _config[key] = value
-    logger.debug(f"Configuration updated: {key} = {value}")
+    
+    # Update environment variable
+    env_var = f"GOSCLI_{key.upper().replace('.', '_')}"
+    os.environ[env_var] = str(value)
+    
+    logger.debug(f"Config set: {key}={value}, environment variable: {env_var}={os.environ.get(env_var)}")
+    
+    # TODO: Optionally persist to a config file if "persistent" flag is set
 
 def use_indonesian() -> bool:
-    """Returns whether to use Indonesian for AI responses."""
-    return get_config('localization.use_indonesian', False)
+    """
+    Check if Indonesian language mode is enabled.
+    
+    Returns:
+        True if Indonesian language mode is enabled, False otherwise
+    """
+    flag = get_config('indonesian', False)
+    logger.debug(f"Indonesian language setting checked: {flag}, type: {type(flag)}")
+    
+    # Handle string values like "True" or "False"
+    if isinstance(flag, str):
+        if flag.lower() == 'true':
+            return True
+        elif flag.lower() == 'false':
+            return False
+        else:
+            logger.warning(f"Unexpected string value for indonesian flag: '{flag}'. Defaulting to False.")
+            return False
+            
+    return bool(flag)
 
 def get_cot_in_english() -> bool:
-    """Returns whether to keep Chain of Thought reasoning in English when using Indonesian."""
-    return get_config('localization.cot_in_english', True) 
+    """
+    Check if reasoning (Chain of Thought) should remain in English when using Indonesian responses.
+    
+    Returns:
+        True if CoT should remain in English, False if CoT should also be in Indonesian
+    """
+    flag = get_config('cot_in_english', True)
+    logger.debug(f"CoT in English setting checked: {flag}, type: {type(flag)}")
+    
+    # Handle string values
+    if isinstance(flag, str):
+        if flag.lower() == 'true':
+            return True
+        elif flag.lower() == 'false':
+            return False
+        else:
+            logger.warning(f"Unexpected string value for cot_in_english flag: '{flag}'. Defaulting to True.")
+            return True
+            
+    return bool(flag)
+
+def set_config_for_testing(config_dict: Dict[str, Any]) -> None:
+    """
+    Set configuration values for testing purposes.
+    These values will override any existing configuration.
+    
+    Args:
+        config_dict: Dictionary of configuration values to set
+    """
+    global _test_config
+    _test_config.update(config_dict)
+    logger.debug(f"Set testing configuration: {config_dict}")
+
+def clear_test_config() -> None:
+    """Clear all testing configuration values."""
+    global _test_config
+    _test_config = {}
+    logger.debug("Cleared testing configuration")
+
+# Load configuration when the module is imported
+load_configuration() 

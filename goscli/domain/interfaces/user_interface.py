@@ -101,6 +101,17 @@ class UserInterface(abc.ABC):
             **kwargs: Additional display options
         """
         pass
+        
+    def ask_yes_no_question(self, question: str) -> bool:
+        """Asks a yes/no question and returns the answer.
+        
+        Args:
+            question: The question to ask
+            
+        Returns:
+            True if the answer is yes, False otherwise
+        """
+        pass
 
     # Optional: Add methods for progress bars, tables, etc.
     # @abc.abstractmethod

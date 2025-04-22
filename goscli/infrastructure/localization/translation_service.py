@@ -10,6 +10,8 @@ from typing import Optional
 
 # Import AIModel interface to call translation directly when needed
 from goscli.domain.interfaces.ai_model import AIModel
+# Import functions for checking Indonesian settings
+from goscli.infrastructure.config.settings import use_indonesian, get_cot_in_english
 
 logger = logging.getLogger(__name__)
 
@@ -24,134 +26,208 @@ class TranslationService:
         """
         self.ai_model = ai_model
         logger.info("TranslationService initialized")
+        self._log_indonesian_status()
     
-    async def translate_to_indonesian(self, text: str, is_cot: bool = False) -> str:
-        """Translate text to Indonesian, preserving English reasoning if requested.
+    def _log_indonesian_status(self):
+        """Log whether Indonesian mode is enabled."""
+        is_indonesian = use_indonesian()
+        if is_indonesian:
+            logger.info("TranslationService: Indonesian mode is ENABLED")
+            logger.info(f"TranslationService: Keep Chain of Thought in English: {get_cot_in_english()}")
+        else:
+            logger.info("TranslationService: Indonesian mode is DISABLED")
+    
+    def translate_to_indonesian(self, text: str, preserve_english_reasoning: bool = False) -> str:
+        """Translates text to Indonesian.
+        
+        Args:
+            text: The English text to translate
+            preserve_english_reasoning: If True, will keep reasoning/thought process in English
+                                         and only translate the conclusion/answer
+                                         
+        Returns:
+            Translated Indonesian text
+        """
+        # Check for empty text
+        if not text or not text.strip():
+            logger.debug("Nothing to translate - text is empty")
+            return text
+            
+        # Skip translation if Indonesian is disabled (safety check)
+        if not use_indonesian():
+            logger.debug("Indonesian mode is disabled - skipping translation")
+            return text
+            
+        logger.debug(f"Translating text to Indonesian (length: {len(text)}, preserve_english_reasoning: {preserve_english_reasoning})")
+        
+        try:
+            if preserve_english_reasoning:
+                logger.debug("Using partial translation to preserve English reasoning")
+                return self._translate_with_cot_preservation(text)
+            else:
+                logger.debug("Using full text translation")
+                return self._translate_full_text(text)
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            logger.warning("Returning original text due to translation failure")
+            return text
+    
+    def _translate_full_text(self, text: str) -> str:
+        """Translates the entire text to Indonesian.
+        
+        Args:
+            text: The English text to translate
+            
+        Returns:
+            Translated Indonesian text
+        """
+        logger.debug("Starting full text translation")
+        
+        # Use AI model if available
+        if self.ai_model:
+            try:
+                logger.debug("Using AI model for translation")
+                
+                # Prepare the translation prompt
+                system_prompt = (
+                    "You are a professional English to Indonesian translator. Translate the given text to natural, "
+                    "fluent Indonesian while preserving technical terms when appropriate. Ensure the translation "
+                    "sounds natural and maintains the original meaning. DO NOT add any explanations or extra text - "
+                    "simply return the translated text."
+                )
+                
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Translate the following to Indonesian:\n\n{text}"}
+                ]
+                
+                # Get the translation from the AI model
+                response = self.ai_model.generate_content(messages)
+                translated_text = response.content
+                
+                logger.debug(f"AI translation complete. Original: {len(text)} chars, Translated: {len(translated_text)} chars")
+                return translated_text
+            except Exception as e:
+                logger.error(f"AI translation failed: {e}")
+                logger.debug("Falling back to direct translation")
+        else:
+            logger.debug("No AI model available, using fallback translation")
+            
+        # Fallback to direct translation for common phrases
+        return self._fallback_direct_translation(text)
+    
+    def _translate_with_cot_preservation(self, text: str) -> str:
+        """Preserves English reasoning but translates the conclusion to Indonesian.
+        
+        This function attempts to identify the conclusion/answer part of the response
+        and only translates that portion, keeping the reasoning in English.
+        
+        Args:
+            text: The English text to translate
+            
+        Returns:
+            Text with English reasoning but Indonesian conclusion/answer
+        """
+        logger.debug("Starting translation with English reasoning preservation")
+        
+        # Patterns to identify conclusion sections
+        conclusion_patterns = [
+            r"(Therefore,.*?)$",
+            r"(In conclusion,.*?)$",
+            r"(In summary,.*?)$",
+            r"(To summarize,.*?)$", 
+            r"(The answer is.*?)$",
+            r"(The solution is.*?)$",
+            r"(Finally,.*?)$",
+            r"(So,.*?)$",
+            r"(Overall,.*?)$",
+            r"(Thus,.*?)$"
+        ]
+        
+        # Try to find a conclusion section
+        conclusion_text = None
+        conclusion_marker = None
+        
+        for pattern in conclusion_patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                conclusion_text = match.group(1)
+                conclusion_marker = match.group(0)[:20] + "..." if len(match.group(0)) > 23 else match.group(0)
+                logger.debug(f"Found conclusion marker: '{conclusion_marker}'")
+                logger.debug(f"Conclusion text length: {len(conclusion_text)} chars")
+                break
+                
+        if not conclusion_text:
+            logger.debug("No conclusion section found, translating last paragraph instead")
+            # If no conclusion pattern is found, use the last paragraph as the conclusion
+            paragraphs = text.split("\n\n")
+            conclusion_text = paragraphs[-1] if paragraphs else text
+            logger.debug(f"Using last paragraph as conclusion (length: {len(conclusion_text)} chars)")
+            
+        # Skip if conclusion is too short (likely not a real conclusion)
+        if len(conclusion_text) < 10:
+            logger.warning(f"Conclusion too short ({len(conclusion_text)} chars), skipping partial translation")
+            return self._translate_full_text(text)
+            
+        try:
+            # Translate just the conclusion
+            logger.debug("Translating conclusion to Indonesian")
+            translated_conclusion = self._translate_full_text(conclusion_text)
+            
+            # Replace the original conclusion with the translated one
+            if conclusion_marker:
+                logger.debug("Replacing original conclusion with translated version")
+                return text.replace(conclusion_text, translated_conclusion)
+            else:
+                logger.debug("Replacing last paragraph with translated version")
+                result = text.replace(conclusion_text, translated_conclusion)
+                return result
+        except Exception as e:
+            logger.error(f"Error during partial translation: {e}")
+            logger.warning("Falling back to full text translation")
+            return self._translate_full_text(text)
+    
+    async def _translate_with_ai(self, text: str) -> str:
+        """Translate text using an AI model.
         
         Args:
             text: The text to translate
-            is_cot: If True, preserve English reasoning and only translate the conclusion
             
         Returns:
-            Translated text with appropriate formatting
+            Translated text
         """
-        if not text:
-            logger.debug("Empty text provided, nothing to translate")
-            return text
+        if not self.ai_model:
+            logger.warning("No AI model available for translation")
+            return None
             
-        logger.info(f"Translating text to Indonesian (is_cot={is_cot})")
-        if not is_cot:
-            # Direct translation - entire response in Indonesian
-            logger.debug("Performing full text translation")
-            return await self._translate_full_text(text)
-        else:
-            # CoT translation - keep English reasoning, translate conclusion
-            logger.debug("Performing CoT-preserving translation")
-            return await self._translate_with_cot_preservation(text)
-    
-    async def _translate_full_text(self, text: str) -> str:
-        """Translate the entire text to Indonesian.
-        
-        This is used when CoT preservation is not needed.
-        """
-        logger.debug(f"_translate_full_text called, has_ai_model={self.ai_model is not None}")
-        if self.ai_model:
-            # If we have direct access to the AI model, use it for translation
-            # This would be more elegant but requires passing messages directly
+        try:
+            logger.debug("Preparing translation prompt for AI model")
             prompt = (
-                "Translate the following text to Indonesian. Ensure the translation is "
-                "natural and fluent, preserving the original meaning:\n\n"
+                "Translate the following English text to Indonesian. "
+                "Keep any technical terms, code, and formatting intact:\n\n"
                 f"{text}"
             )
             
+            # Create a simple system message and user message with the prompt
             messages = [
-                {"role": "system", "content": "You are a professional translator from English to Indonesian."},
+                {"role": "system", "content": "You are a high-quality English to Indonesian translator."},
                 {"role": "user", "content": prompt}
             ]
             
-            try:
-                logger.debug("Sending translation request to AI model")
-                response = await self.ai_model.send_messages(messages)
-                if response and response.text:
-                    logger.debug(f"Translation successful, received {len(response.text)} chars")
-                    return response.text
-                logger.warning("AI model returned empty response, using fallback translation")
-                return self._fallback_direct_translation(text)
-            except Exception as e:
-                logger.error(f"Error using AI model for translation: {e}", exc_info=True)
-                return self._fallback_direct_translation(text)
-        else:
-            # Fallback method when no AI model is provided
-            logger.warning("No AI model available for translation, using fallback")
-            return self._fallback_direct_translation(text)
-    
-    async def _translate_with_cot_preservation(self, text: str) -> str:
-        """Translate only the conclusion while preserving English reasoning.
-        
-        This looks for patterns that indicate a conclusion and translates just that part.
-        """
-        # Common conclusion indicators
-        conclusion_patterns = [
-            r"(?:^|\n)(?:Therefore|In conclusion|To summarize|Finally|In summary|Hence|Thus|To conclude|In the end|Ultimately).+?(?:$|\n\n)",
-            r"(?:^|\n)(?:The answer is|My answer is|I believe the answer is|The solution is).+?(?:$|\n\n)"
-        ]
-        
-        # Try to find conclusion sections
-        conclusions = []
-        for pattern in conclusion_patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE | re.DOTALL)
-            for match in matches:
-                conclusions.append((match.start(), match.end(), match.group(0)))
-        
-        logger.debug(f"Found {len(conclusions)} conclusion sections using patterns")
-        
-        # If no conclusion found, try a simpler approach - take the last paragraph
-        if not conclusions:
-            logger.debug("No conclusion patterns matched, trying last paragraph approach")
-            paragraphs = text.split("\n\n")
-            if len(paragraphs) > 1:
-                # Take the last non-empty paragraph as the conclusion
-                last_paragraph = next((p for p in reversed(paragraphs) if p.strip()), "")
-                if last_paragraph:
-                    # Find the position in the original text
-                    start = text.rfind(last_paragraph)
-                    if start >= 0:
-                        logger.debug(f"Using last paragraph as conclusion: {last_paragraph[:50]}...")
-                        conclusions.append((start, start + len(last_paragraph), last_paragraph))
-        
-        # If we still couldn't identify a conclusion, translate the entire text
-        if not conclusions:
-            logger.warning("Could not identify any conclusion sections, translating entire text")
-            return await self._translate_full_text(text)
-        
-        # Sort conclusions by their start position
-        conclusions.sort()
-        
-        # Translate each conclusion
-        translated_text = text
-        offset = 0  # Track position shifts as we replace text
-        
-        for i, (start, end, conclusion_text) in enumerate(conclusions):
-            # Adjust positions based on previous replacements
-            adjusted_start = start + offset
-            adjusted_end = end + offset
+            # Send to AI
+            logger.debug("Sending translation request to AI model")
+            response = await self.ai_model.send_messages(messages)
             
-            # Translate the conclusion
-            logger.debug(f"Translating conclusion {i+1}/{len(conclusions)}: {conclusion_text[:50]}...")
-            translated_conclusion = await self._translate_full_text(conclusion_text)
-            
-            # Replace in the text
-            before = translated_text[:adjusted_start]
-            after = translated_text[adjusted_end:]
-            translated_text = before + translated_conclusion + after
-            
-            # Update offset
-            offset += len(translated_conclusion) - (end - start)
-        
-        # Add a note at the beginning to explain the mixed languages
-        note = "[Penjelasan dalam bahasa Inggris, kesimpulan dalam bahasa Indonesia]\n\n"
-        logger.debug("Added language note and returning mixed-language text")
-        return note + translated_text
+            if response and response.content:
+                logger.debug(f"Received translation response. Length: {len(response.content)}")
+                return response.content
+            else:
+                logger.warning("Empty response from AI model")
+                return None
+                
+        except Exception as e:
+            logger.error(f"AI translation error: {e}", exc_info=True)
+            return None
     
     def _fallback_direct_translation(self, text: str) -> str:
         """Fallback translation when AI model is unavailable or fails.

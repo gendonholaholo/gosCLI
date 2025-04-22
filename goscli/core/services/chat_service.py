@@ -8,6 +8,8 @@ API calls with resilience, and response processing.
 import asyncio
 import logging
 import time
+import os
+import sys
 from typing import List, Optional
 
 # Domain Layer Imports
@@ -58,6 +60,9 @@ APIError = getattr(
     __import__("openai", fromlist=["APIError"]), "APIError", Exception
 )  # Example
 
+# Utils imports
+from goscli.utils.mermaid_generator import MermaidGenerator
+
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
@@ -93,6 +98,8 @@ class ChatService:
         self.current_session: Optional[ChatSession] = None
         self.chat_task: Optional[asyncio.Task] = None
         self.max_prompt_tokens = MAX_PROMPT_TOKENS  # Use loaded config value
+        # Add mermaid generator
+        self.mermaid_generator = MermaidGenerator()
         logger.info(
             f"ChatService initialized with default AI model:"
             f" {ai_model.__class__.__name__}"
@@ -125,8 +132,20 @@ class ChatService:
             
             # Postprocess response for language if needed
             if response:
-                logger.debug("Response received, applying language postprocessing")
-                response = await self.language_processor.postprocess_response(response)
+                logger.debug(f"Response received of type: {type(response)}")
+                try:
+                    # Check if postprocess_response is async or not
+                    if asyncio.iscoroutinefunction(self.language_processor.postprocess_response):
+                        logger.debug("Calling async postprocess_response")
+                        response = await self.language_processor.postprocess_response(response)
+                    else:
+                        logger.debug("Calling sync postprocess_response")
+                        response = self.language_processor.postprocess_response(response)
+                    logger.debug("Language postprocessing completed successfully")
+                except Exception as e:
+                    logger.error(f"Error during language postprocessing: {e}", exc_info=True)
+                    logger.warning("Using original response due to postprocessing failure")
+                    # Continue with the original response
             else:
                 logger.warning("No response received from AI model")
                 
@@ -157,6 +176,206 @@ class ChatService:
                 f"An unexpected error occurred during AI communication: {e}"
             )
             return None  # Treat as failure for this turn
+
+    async def _process_mermaid_diagrams(self, content: str) -> None:
+        """Detects and processes Mermaid diagrams in the content.
+        
+        Args:
+            content: The content to check for diagrams
+        """
+        logger.debug(f"Starting Mermaid diagram detection on content of length: {len(content)}")
+        
+        # Log whether Indonesian mode is enabled
+        is_indonesian = use_indonesian()
+        logger.debug(f"Indonesian mode in Mermaid diagram processing: {is_indonesian}")
+        
+        # Detect Mermaid blocks in the content
+        mermaid_blocks = self.mermaid_generator.detect_mermaid_blocks(content)
+        
+        if not mermaid_blocks:
+            logger.debug("No Mermaid diagrams detected in content")
+            return
+        
+        logger.info(f"Found {len(mermaid_blocks)} Mermaid diagram(s) in content")
+        logger.debug(f"Operating system: {os.name}, Platform: {sys.platform}")
+        
+        # Ask the user if they want to generate the diagrams
+        try:
+            # Prepare the question text - this should be translated if in Indonesian mode
+            question_text = "Mermaid diagram(s) detected. Would you like to generate the diagram(s)?"
+            if is_indonesian:
+                # You could hard-code the translation or use translation service, but for UI messages
+                # it's usually better to hard-code for reliability
+                question_text = "Diagram Mermaid terdeteksi. Apakah Anda ingin membuat diagram?"
+                logger.debug("Using Indonesian text for diagram generation question")
+            
+            user_choice = self.ui.ask_yes_no_question(question_text)
+            logger.debug(f"User chose to generate diagrams: {user_choice}")
+            if not user_choice:
+                logger.info("User chose not to generate diagrams")
+                return
+                
+            # Ask for diagram size
+            diagram_size = self.ui.ask_diagram_size()
+            logger.debug(f"User selected diagram size: {diagram_size}x{diagram_size}")
+        except Exception as e:
+            logger.error(f"Error when asking user about diagram generation: {e}", exc_info=True)
+            return
+        
+        # Check if mmdc is installed
+        try:
+            mmdc_installed = self.mermaid_generator.is_mmdc_installed()
+            logger.debug(f"mmdc installation check result: {mmdc_installed}")
+            
+            if not mmdc_installed:
+                logger.info("mmdc not installed, offering to install it")
+                
+                # Prepare info message text based on language mode
+                info_text = "Mermaid CLI (mmdc) is not installed but required for diagram generation."
+                if is_indonesian:
+                    info_text = "Mermaid CLI (mmdc) tidak terinstal tapi dibutuhkan untuk membuat diagram."
+                    logger.debug("Using Indonesian text for mmdc installation info")
+                
+                self.ui.display_info(info_text)
+                
+                try:
+                    # Prepare question text based on language mode
+                    install_question = "Would you like to install Mermaid CLI (requires npm)?"
+                    if is_indonesian:
+                        install_question = "Apakah Anda ingin menginstal Mermaid CLI (memerlukan npm)?"
+                        logger.debug("Using Indonesian text for mmdc installation question")
+                    
+                    install_choice = self.ui.ask_yes_no_question(install_question)
+                    logger.debug(f"User chose to install mmdc: {install_choice}")
+                    
+                    if install_choice:
+                        logger.debug("Attempting to display thinking indicator")
+                        try:
+                            # Prepare message text based on language mode
+                            thinking_message = "Installing Mermaid CLI..."
+                            if is_indonesian:
+                                thinking_message = "Menginstal Mermaid CLI..."
+                                logger.debug("Using Indonesian text for mmdc installation thinking indicator")
+                            
+                            # Use kwargs to handle potential method signature issues
+                            self.ui.display_thinking(**{"message": thinking_message})
+                        except TypeError as te:
+                            logger.warning(f"TypeError when calling display_thinking with message parameter: {te}")
+                            # Fallback to parameterless call
+                            self.ui.display_thinking()
+                            logger.debug("Fallback to parameterless display_thinking call succeeded")
+                        
+                        install_result = self.mermaid_generator.install_mmdc()
+                        logger.debug(f"mmdc installation attempt result: {install_result}")
+                        
+                        if install_result:
+                            # Prepare success message based on language mode
+                            success_text = "Mermaid CLI installed successfully."
+                            if is_indonesian:
+                                success_text = "Mermaid CLI berhasil diinstal."
+                                logger.debug("Using Indonesian text for mmdc installation success")
+                            
+                            self.ui.display_info(success_text)
+                        else:
+                            # Prepare error message based on language mode
+                            error_text = "Failed to install Mermaid CLI. Please install it manually using 'npm install -g @mermaid-js/mermaid-cli'."
+                            if is_indonesian:
+                                error_text = "Gagal menginstal Mermaid CLI. Silakan instal secara manual menggunakan 'npm install -g @mermaid-js/mermaid-cli'."
+                                logger.debug("Using Indonesian text for mmdc installation error")
+                            
+                            self.ui.display_error(error_text)
+                            return
+                    else:
+                        # Prepare skip message based on language mode
+                        skip_text = "Skipping diagram generation."
+                        if is_indonesian:
+                            skip_text = "Melewati pembuatan diagram."
+                            logger.debug("Using Indonesian text for diagram generation skip")
+                        
+                        self.ui.display_info(skip_text)
+                        return
+                except Exception as e:
+                    logger.error(f"Error during mmdc installation dialog: {e}", exc_info=True)
+                    return
+        except Exception as e:
+            logger.error(f"Error checking if mmdc is installed: {e}", exc_info=True)
+            
+            # Prepare error message based on language mode
+            error_text = f"Error checking Mermaid CLI installation: {e}"
+            if is_indonesian:
+                error_text = f"Kesalahan memeriksa instalasi Mermaid CLI: {e}"
+                logger.debug("Using Indonesian text for mmdc check error")
+            
+            self.ui.display_error(error_text)
+            return
+        
+        # Generate diagrams
+        for i, mermaid_code in enumerate(mermaid_blocks):
+            logger.debug(f"Processing diagram {i+1}/{len(mermaid_blocks)}")
+            logger.debug(f"Mermaid code snippet (first 100 chars): {mermaid_code[:100]}...")
+            
+            try:
+                logger.debug("Attempting to display thinking indicator for diagram generation")
+                try:
+                    # Prepare thinking message based on language mode
+                    thinking_text = f"Generating diagram {i+1}/{len(mermaid_blocks)}..."
+                    if is_indonesian:
+                        thinking_text = f"Membuat diagram {i+1}/{len(mermaid_blocks)}..."
+                        logger.debug("Using Indonesian text for diagram generation thinking indicator")
+                    
+                    # Use kwargs to handle potential method signature issues
+                    self.ui.display_thinking(**{"message": thinking_text})
+                except TypeError as te:
+                    logger.warning(f"TypeError when calling display_thinking with message parameter: {te}")
+                    # Fallback to parameterless call
+                    self.ui.display_thinking()
+                    logger.debug("Fallback to parameterless display_thinking call succeeded")
+                
+                logger.debug("Calling generate_diagram method")
+                file_path = self.mermaid_generator.generate_diagram(mermaid_code, size=diagram_size)
+                success = file_path is not None
+                logger.debug(f"Diagram generation result: success={success}, file_path={file_path}")
+                
+                if success and file_path:
+                    # Prepare success message based on language mode
+                    success_text = f"Diagram generated: {file_path}"
+                    if is_indonesian:
+                        success_text = f"Diagram berhasil dibuat: {file_path}"
+                        logger.debug("Using Indonesian text for diagram generation success")
+                    
+                    self.ui.display_info(success_text)
+                    logger.info(f"Successfully generated diagram in {'Indonesian' if is_indonesian else 'English'} mode: {file_path}")
+                    
+                    # Try to open the diagram if on a desktop system
+                    try:
+                        if os.name == 'nt':  # Windows
+                            logger.debug(f"Attempting to open diagram with os.startfile on Windows: {file_path}")
+                            os.startfile(file_path)
+                        elif os.name == 'posix':  # macOS or Linux
+                            logger.debug(f"Attempting to open diagram with xdg-open on POSIX: {file_path}")
+                            import subprocess
+                            subprocess.run(['xdg-open', file_path], check=False)
+                        logger.debug("Successfully initiated diagram opening")
+                    except Exception as e:
+                        logger.error(f"Error opening diagram: {e}", exc_info=True)
+                else:
+                    # Prepare error message based on language mode
+                    error_text = "Failed to generate diagram."
+                    if is_indonesian:
+                        error_text = "Gagal membuat diagram."
+                        logger.debug("Using Indonesian text for diagram generation failure")
+                    
+                    self.ui.display_error(error_text)
+            except Exception as e:
+                logger.error(f"Unexpected error generating diagram {i+1}: {e}", exc_info=True)
+                
+                # Prepare error message based on language mode
+                error_text = f"Error generating diagram: {e}"
+                if is_indonesian:
+                    error_text = f"Kesalahan dalam membuat diagram: {e}"
+                    logger.debug("Using Indonesian text for diagram generation error")
+                
+                self.ui.display_error(error_text)
 
     async def start_chat_loop(self) -> None:
         """Runs the main asynchronous loop for a chat session."""
@@ -292,25 +511,25 @@ class ChatService:
                 self.ui.display_thinking()
 
                 # 8. Call AI
-                structured_response = await self._call_ai_with_retry(messages_for_api)
+                response = await self._call_ai_with_retry(messages_for_api)
                 ai_messages += 1
 
                 # 9. Handle potential API failure
-                if structured_response is None:
+                if response is None:
                     # Error already displayed by _call_ai_with_retry
                     continue  # Skip to next user prompt
 
                 # 10. Process Response with QA Agent
                 ai_processed_response: ProcessedOutput = self.qa_agent.process_response(
-                    structured_response
+                    response
                 )
 
                 # 11. Add AI message to history
                 # Estimate AI response tokens (if usage data available)
                 ai_token_count = None
-                if structured_response.token_usage:
+                if response.token_usage:
                     ai_token_count = TokenCount(
-                        structured_response.token_usage.get("completion_tokens", 0)
+                        response.token_usage.get("completion_tokens", 0)
                     )
                 else:
                     # Estimate if usage not provided
@@ -327,14 +546,49 @@ class ChatService:
                 
                 # 12. Detect if response is primarily code and set message type
                 message_type = "normal"
-                content_str = str(ai_processed_response)
-                if self._is_primarily_code(content_str):
+                content_str = None
+                
+                # Safely extract content as string
+                if hasattr(response, 'content'):
+                    # Get content from StructuredAIResponse
+                    if isinstance(response.content, str):
+                        content_str = response.content
+                    else:
+                        logger.warning(f"Response content is not a string but: {type(response.content)}")
+                        # Try to convert to string
+                        try:
+                            content_str = str(response.content) 
+                            logger.debug("Successfully converted response content to string")
+                        except Exception as e:
+                            logger.error(f"Failed to convert response content to string: {e}")
+                            content_str = ""
+                elif isinstance(response, str):
+                    # Direct string response
+                    content_str = response
+                else:
+                    logger.warning(f"Response has no content attribute and is not a string: {type(response)}")
+                    content_str = str(ai_processed_response)
+                    
+                # Check if it's primarily code
+                if content_str and self._is_primarily_code(content_str):
                     message_type = "code"
+                    logger.debug("Response identified as primarily code")
 
                 # 13. Display AI response with appropriate styling
                 self.ui.display_output(
                     ai_processed_response, title="AI", message_type=message_type
                 )
+
+                # After receiving a response from the AI, check for optimized use case
+                if content_str:
+                    logger.debug(f"Checking for Mermaid diagrams in content (length: {len(content_str)})")
+                    try:
+                        await self._process_mermaid_diagrams(content_str)
+                    except Exception as e:
+                        logger.error(f"Error processing Mermaid diagrams: {e}", exc_info=True)
+                        self.ui.display_error(f"Error processing diagrams: {e}")
+                else:
+                    logger.warning("No content string available to check for Mermaid diagrams")
 
             # 14. Error Handling
             except (RateLimitError, APIError) as api_err:
@@ -422,7 +676,7 @@ Session Statistics:
         
         self.ui.display_info(stats_text)
         
-    def _is_primarily_code(self, content: str) -> bool:
+    def _is_primarily_code(self, content) -> bool:
         """Determines if a response is primarily code.
         
         Args:
@@ -435,6 +689,16 @@ Session Statistics:
         if not content:
             logger.debug("Empty content provided to code detection")
             return False
+            
+        # Handle non-string content
+        if not isinstance(content, str):
+            logger.warning(f"Non-string content provided to code detection: {type(content)}")
+            try:
+                content = str(content)
+                logger.debug("Successfully converted content to string for code detection")
+            except Exception as e:
+                logger.error(f"Failed to convert content to string for code detection: {e}")
+                return False
             
         # Count code blocks (``` delimited)
         code_block_count = content.count("```")
@@ -512,4 +776,3 @@ Session Statistics:
             self.chat_task = None
 
     # TODO: Add other methods if needed (e.g., loading/saving sessions)
-

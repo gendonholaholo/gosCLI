@@ -7,6 +7,7 @@ different languages while maintaining quality of content.
 import logging
 import re
 from typing import Dict, List, Optional
+import copy
 
 from goscli.domain.interfaces.ai_model import AIModel
 from goscli.domain.models.ai import ChatMessage, StructuredAIResponse
@@ -18,122 +19,151 @@ logger = logging.getLogger(__name__)
 class LanguageProcessor:
     """Handles language-specific processing of prompts and responses."""
     
-    def __init__(self, translation_service: Optional[TranslationService] = None):
+    def __init__(self, translation_service=None):
         """Initialize the language processor.
         
         Args:
-            translation_service: Service for translating text
+            translation_service: Optional TranslationService instance.
+                                 If not provided, one will be created.
         """
         self.translation_service = translation_service or TranslationService()
         logger.info("LanguageProcessor initialized")
+        # Log whether Indonesian mode is enabled at initialization
+        self._log_indonesian_status()
     
-    def enhance_system_prompt(self, system_prompt: str) -> str:
-        """Enhance the system prompt with language-specific instructions if needed.
+    def _log_indonesian_status(self):
+        """Log whether Indonesian mode is enabled."""
+        is_indonesian = use_indonesian()
+        if is_indonesian:
+            logger.info("Indonesian language mode is ENABLED")
+        else:
+            logger.info("Indonesian language mode is DISABLED")
+    
+    def enhance_system_prompt(self, prompt: str) -> str:
+        """Enhance system prompt with Indonesian instructions if Indonesian is enabled.
         
         Args:
-            system_prompt: The original system prompt
+            prompt: The original system prompt
             
         Returns:
-            Enhanced system prompt with language instructions if needed
+            Enhanced system prompt
         """
         if not use_indonesian():
-            return system_prompt
+            logger.debug("Indonesian mode disabled - not enhancing system prompt")
+            return prompt
             
-        # Add Indonesian instructions to the system prompt
-        indonesian_suffix = self.translation_service.get_indonesian_system_prompt_suffix()
+        logger.debug("Enhancing system prompt with Indonesian instructions")
         
-        # Check if the prompt already ends with a newline
-        if system_prompt and not system_prompt.endswith('\n'):
-            system_prompt += '\n\n'
+        # Add instruction to respond in Indonesian at the end of the prompt
+        indonesian_instruction = (
+            "\n\nPenting: Berikan respons dalam Bahasa Indonesia yang baik dan benar. "
+            "Gunakan Bahasa Indonesia formal dan hindari pencampuran dengan Bahasa Inggris "
+            "kecuali untuk istilah teknis yang memang tidak ada padanannya dalam Bahasa Indonesia."
+        )
         
-        return f"{system_prompt}{indonesian_suffix}"
-    
-    def preprocess_messages(self, messages: List[ChatMessage]) -> List[ChatMessage]:
-        """Preprocess messages before sending to an AI model.
+        enhanced_prompt = f"{prompt}{indonesian_instruction}"
+        logger.debug(f"Added {len(indonesian_instruction)} chars of Indonesian instructions to system prompt")
         
-        This can modify system prompts to include language instructions.
+        return enhanced_prompt
+        
+    def preprocess_messages(self, messages: list) -> list:
+        """Preprocess chat messages, enhancing system messages as needed.
         
         Args:
-            messages: List of chat messages to preprocess
+            messages: List of chat messages
             
         Returns:
-            Preprocessed messages with language enhancements if needed
+            Preprocessed messages
         """
-        logger.debug(f"Language processor preprocess_messages called, use_indonesian={use_indonesian()}")
-        if not use_indonesian():
-            logger.debug("Indonesian mode disabled, returning original messages")
+        if not messages:
+            logger.debug("No messages to preprocess")
             return messages
             
-        # Create new message list to avoid modifying the original
-        processed_messages = []
+        logger.debug(f"Preprocessing {len(messages)} messages")
         
-        for message in messages:
-            if message["role"] == "system":
-                # Enhance system messages with language instructions
-                enhanced_content = self.enhance_system_prompt(message["content"])
-                logger.debug(f"Enhanced system prompt with Indonesian instructions. Original length: {len(message['content'])}, Enhanced length: {len(enhanced_content)}")
-                processed_messages.append({
-                    "role": "system",
-                    "content": enhanced_content
-                })
-            else:
-                # Pass through other messages unchanged
-                processed_messages.append(message)
+        processed = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                logger.warning(f"Skipping invalid message format: {type(msg)}")
+                processed.append(msg)
+                continue
+                
+            # Make a copy to avoid modifying the original
+            processed_msg = msg.copy()
+            
+            # Enhance system messages with Indonesian instructions
+            if msg.get("role") == "system" and use_indonesian():
+                logger.debug("Enhancing system message with Indonesian instructions")
+                processed_msg["content"] = self.enhance_system_prompt(msg.get("content", ""))
+                
+            processed.append(processed_msg)
+            
+        logger.debug(f"Preprocessing complete - {len(processed)} messages processed")
+        return processed
         
-        logger.debug(f"Returning {len(processed_messages)} preprocessed messages")
-        return processed_messages
-    
-    async def postprocess_response(self, response: StructuredAIResponse) -> StructuredAIResponse:
-        """Postprocess an AI response for language enhancements.
+    def postprocess_response(self, response):
+        """Postprocess AI response for language enhancements.
         
         Args:
-            response: The original AI response
+            response: The AI response (could be string or StructuredAIResponse)
             
         Returns:
-            Processed response with translations if needed
+            Enhanced response
         """
-        logger.debug(f"Language processor postprocess_response called, use_indonesian={use_indonesian()}")
-        if not use_indonesian():
-            logger.debug("Indonesian mode disabled, returning original response")
+        if response is None:
+            logger.debug("Empty response, nothing to postprocess")
             return response
-            
-        if not response or not response.text:
-            logger.debug("Empty response, nothing to translate")
-            return response
-            
-        # Determine if we need to preserve chain of thought in English
-        is_cot = get_cot_in_english()
-        logger.debug(f"Chain of Thought in English: {is_cot}")
         
-        # Don't try to translate if no translation service
-        if not self.translation_service:
-            logger.warning("No translation service available")
+        # Debug log the type of response being processed    
+        logger.debug(f"Postprocessing response of type: {type(response)}")
+        
+        # Handle StructuredAIResponse objects
+        content = None
+        if hasattr(response, 'content'):
+            logger.debug("Response is a structured object with content attribute")
+            content = response.content
+        else:
+            logger.debug("Response is being treated as direct content")
+            content = response
+            
+        # Safety check for content
+        if content is None:
+            logger.warning("Response content is None, cannot postprocess")
             return response
             
-        try:
-            # Log original text for debugging
-            logger.debug(f"Original response text (first 100 chars): {response.text[:100]}...")
+        # Now log the content length safely
+        if isinstance(content, str):
+            logger.debug(f"Processing content of length {len(content)}")
+        else:
+            logger.debug(f"Content is not a string but of type: {type(content)}")
             
-            # Translate the response text
-            translated_text = await self.translation_service.translate_to_indonesian(
-                response.text, is_cot=is_cot
-            )
-            
-            # Log translated text for debugging
-            logger.debug(f"Translated text (first 100 chars): {translated_text[:100]}...")
-            
-            # Create a new response with the translated text
-            # Since StructuredAIResponse is likely immutable, create a new one
-            new_response = StructuredAIResponse(
-                text=translated_text,
-                token_usage=response.token_usage,
-                finish_reason=response.finish_reason,
-                created_at=response.created_at,
-                model=response.model,
-                raw_response=response.raw_response
-            )
-            
-            return new_response
-        except Exception as e:
-            logger.error(f"Failed to translate response: {e}", exc_info=True)
-            return response 
+        # Check if we need to translate
+        if use_indonesian() and self.translation_service:
+            try:
+                logger.debug("Translating response to Indonesian")
+                preserve_english_reasoning = get_cot_in_english()
+                logger.debug(f"Preserving English reasoning: {preserve_english_reasoning}")
+                
+                # Translate content to Indonesian if it's a string
+                if isinstance(content, str):
+                    translated_content = self.translation_service.translate_to_indonesian(
+                        content,
+                        preserve_english_reasoning=preserve_english_reasoning
+                    )
+                    logger.debug("Translation completed")
+                    
+                    # If original was a structured response, update its content
+                    if hasattr(response, 'content'):
+                        logger.debug("Updating structured response content with translation")
+                        response.content = translated_content
+                        return response
+                    else:
+                        # Otherwise return the translated content directly
+                        return translated_content
+                else:
+                    logger.warning(f"Cannot translate non-string content of type: {type(content)}")
+            except Exception as e:
+                logger.error(f"Translation error during postprocessing: {e}")
+                logger.warning("Using original response due to translation failure")
+                
+        return response 
