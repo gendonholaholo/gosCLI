@@ -274,6 +274,9 @@ poetry run goscli <command> [OPTIONS] [ARGUMENTS]
   - Mapping user journeys
   - Illustrating state transitions
 
+ ![918970d835063ac212521b41e4f79f78](https://github.com/user-attachments/assets/b8a7becd-9df5-4d0e-a593-1737d0849d20)
+ ![3a2af55a7cf7ba1610320e535dc3b926](https://github.com/user-attachments/assets/5458d6ce-6c47-4fb3-927e-eb11e38e353d)
+
 ### General Examples
 
 ```bash
