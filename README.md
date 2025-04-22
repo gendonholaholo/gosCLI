@@ -274,7 +274,11 @@ poetry run goscli <command> [OPTIONS] [ARGUMENTS]
   - Mapping user journeys
   - Illustrating state transitions
 
- ![918970d835063ac212521b41e4f79f78](https://github.com/user-attachments/assets/b8a7becd-9df5-4d0e-a593-1737d0849d20)
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/b8a7becd-9df5-4d0e-a593-1737d0849d20" alt="img1" />
+  <img src="https://github.com/user-attachments/assets/f6e23a49-dc16-484e-8b39-24e9e0caf96b" alt="img2" />
+</div>
+
 
 ### General Examples
 
