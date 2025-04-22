@@ -91,6 +91,8 @@ poetry run goscli <command> [OPTIONS] [ARGUMENTS]
     
 ![Screenshot 2025-04-21 235001](https://github.com/user-attachments/assets/8c904de7-98bb-45e4-b691-e0c033723d07)
 
+![image](https://github.com/user-attachments/assets/23003e4b-d488-4558-af12-874022781458)
+
     Type your prompts and press Enter. Use `exit` or `quit` to end the session.
 
 *   **Analyze File (`analyze`):**
