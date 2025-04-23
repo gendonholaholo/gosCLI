@@ -136,6 +136,48 @@ class MermaidGenerator:
             logger.debug(f"Found {len(matches2)} code blocks with @gosdiag pattern")
             mermaid_blocks.extend(matches2)
         
+        # Pattern 3: Look for @gosdiag followed by any mermaid diagram type
+        # This allows for more flexible usage of @gosdiag tag
+        if "@gosdiag" in text and not matches2:
+            # Extract the text after @gosdiag
+            after_tag = text.split("@gosdiag", 1)[1].strip()
+            logger.debug(f"Found @gosdiag tag followed by text of length: {len(after_tag)}")
+            
+            # Check if the text after @gosdiag might be a valid mermaid diagram
+            for diagram_type, pattern in DIAGRAM_TYPES.items():
+                pattern_regex = re.compile(pattern, re.MULTILINE)
+                if pattern_regex.search(after_tag):
+                    logger.debug(f"Detected potential {diagram_type} diagram after @gosdiag tag")
+                    
+                    # Try to extract a reasonable chunk of text that might be the diagram
+                    # This is a heuristic approach - extract from the diagram type declaration
+                    # to either the next empty line followed by text not resembling diagram syntax,
+                    # or up to a reasonable number of lines
+                    lines = after_tag.split('\n')
+                    diagram_start = None
+                    diagram_end = None
+                    
+                    # Find the line with the diagram type declaration
+                    for i, line in enumerate(lines):
+                        if pattern_regex.search(line):
+                            diagram_start = i
+                            break
+                    
+                    if diagram_start is not None:
+                        # Start from the diagram type line
+                        diagram_content = lines[diagram_start:]
+                        
+                        # Join the potential diagram content and add to blocks
+                        potential_diagram = '\n'.join(diagram_content)
+                        logger.debug(f"Extracted potential diagram content of length: {len(potential_diagram)}")
+                        
+                        # Validate the potential diagram
+                        validation_result = self.validate_mermaid_syntax(potential_diagram)
+                        if validation_result.get('valid', False):
+                            logger.debug("Extracted diagram content passed validation")
+                            mermaid_blocks.append(potential_diagram)
+                            break
+        
         # For backward compatibility, also check for @mmdc pattern
         pattern3 = r"@mmdc\s*([\s\S]*?)@mmdc"
         logger.debug(f"Searching for mermaid code blocks using legacy pattern: {pattern3}")
@@ -174,6 +216,7 @@ class MermaidGenerator:
             - valid: Boolean indicating if the syntax is valid
             - errors: List of error messages
             - problem_lines: Dict mapping line numbers to error messages
+            - suggested_fix: Optional suggestion for fixing errors
         """
         if not mermaid_code or not mermaid_code.strip():
             return {"valid": False, "errors": ["Empty Mermaid code"], "problem_lines": {}}
@@ -181,22 +224,72 @@ class MermaidGenerator:
         lines = mermaid_code.strip().split('\n')
         errors = []
         problem_lines = {}
+        suggested_fix = None
         
         # Check if the first line defines a valid diagram type
         first_line = lines[0].strip()
         diagram_type_valid = False
+        detected_diagram_type = None
         
         for diagram_type, pattern in DIAGRAM_TYPES.items():
             if re.match(pattern, first_line):
                 diagram_type_valid = True
+                detected_diagram_type = diagram_type
                 logger.debug(f"Detected valid diagram type: {diagram_type}")
                 break
                 
         if not diagram_type_valid:
             errors.append(f"Invalid or missing diagram type declaration: '{first_line}'")
             problem_lines[1] = f"Should be a valid diagram type like 'graph TD', 'flowchart LR', etc."
+            
+            # Try to suggest a fix based on content
+            if 'graph' in first_line.lower() or 'flowchart' in first_line.lower():
+                # If it's a graph/flowchart but missing direction
+                logger.debug("Attempting to fix missing direction in graph/flowchart")
+                for direction in ['TD', 'TB', 'BT', 'RL', 'LR']:
+                    if direction in first_line:
+                        suggested_fix = first_line  # Already has direction
+                        break
+                else:
+                    # Add TD as default direction
+                    if 'graph' in first_line.lower():
+                        suggested_fix = re.sub(r'graph\s*$', 'graph TD', first_line, flags=re.IGNORECASE)
+                        if suggested_fix == first_line:  # No change
+                            suggested_fix = f"graph TD"
+                    elif 'flowchart' in first_line.lower():
+                        suggested_fix = re.sub(r'flowchart\s*$', 'flowchart TD', first_line, flags=re.IGNORECASE)
+                        if suggested_fix == first_line:  # No change
+                            suggested_fix = f"flowchart TD"
+            else:
+                # Try to infer diagram type from content
+                inferred_type = None
+                
+                # Look for sequence diagram indicators
+                if any('actor' in line.lower() or '-->' in line or '->' in line for line in lines):
+                    inferred_type = 'sequenceDiagram'
+                # Look for state diagram indicators
+                elif any('state' in line.lower() for line in lines):
+                    inferred_type = 'stateDiagram-v2'
+                # Look for class diagram indicators
+                elif any('class' in line.lower() for line in lines):
+                    inferred_type = 'classDiagram'
+                # Look for ER diagram indicators
+                elif any('entity' in line.lower() or '{' in line for line in lines):
+                    inferred_type = 'erDiagram'
+                # Default to flowchart
+                else:
+                    inferred_type = 'flowchart TD'
+                
+                logger.debug(f"Inferred diagram type: {inferred_type}")
+                suggested_fix = inferred_type
         
-        # Check for common syntax errors
+        # If we have a suggested fix for the first line, build a complete fixed version
+        if suggested_fix:
+            fixed_lines = [suggested_fix] + lines[1:]
+            suggested_fix = '\n'.join(fixed_lines)
+            logger.debug(f"Suggested fix for diagram type: {suggested_fix}")
+        
+        # Check for common syntax errors in the rest of the lines
         for i, line in enumerate(lines, 1):
             if not line.strip():  # Skip empty lines
                 continue
@@ -250,49 +343,19 @@ class MermaidGenerator:
                 error_msg = f"Unclosed brackets: {''.join(stack)}"
                 errors.append(f"Line {i}: {error_msg}")
                 problem_lines[i] = error_msg
-                
-            # Check for common arrow errors in flowcharts
-            if 'graph ' in first_line or 'flowchart ' in first_line:
-                # Look for arrows with spaces in the middle (e.g., "- ->")
-                if re.search(r'(?<!\-)\-\s+\->', line) or re.search(r'(?<!\-)\-\s+\-\-', line):
-                    error_msg = "Malformed arrow with spaces (e.g., '- ->' instead of '-->')"
-                    errors.append(f"Line {i}: {error_msg}")
-                    problem_lines[i] = error_msg
-                
-                # Check for incorrect label syntax on arrows
-                if re.search(r'-->[^|]*\|[^|]*[^|](?!\|)', line) or re.search(r'-->[^|]*[^|](?!\|)', line):
-                    error_msg = "Arrow label should be enclosed in pipes: '-->|Label text|'"
-                    errors.append(f"Line {i}: {error_msg}")
-                    problem_lines[i] = error_msg
         
-        if errors:
-            logger.warning(f"Found {len(errors)} syntax errors in Mermaid code")
-            for error in errors:
-                logger.warning(f"Syntax error: {error}")
-                
-            # Suggest fixes for common errors
-            fixed_lines = []
-            for i, line in enumerate(lines, 1):
-                if i in problem_lines:
-                    # Fix mixed arrow syntax
-                    fixed_line = re.sub(r'-->\|([^|]*)\|>', r'-->|\1|', line)
-                    # Fix spaces in arrows
-                    fixed_line = re.sub(r'(?<!\-)\-\s+\-', r'--', fixed_line)
-                    # Add comment about the fix
-                    fixed_lines.append(f"{fixed_line}  # Fixed: {problem_lines[i]}")
-                else:
-                    fixed_lines.append(line)
-                    
-            logger.info("Suggested fixed Mermaid code:\n" + "\n".join(fixed_lines))
-            
-            return {
-                "valid": False,
-                "errors": errors,
-                "problem_lines": problem_lines,
-                "suggested_fix": "\n".join(fixed_lines)
-            }
+        # Prepare response object
+        response = {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "problem_lines": problem_lines
+        }
         
-        return {"valid": True, "errors": [], "problem_lines": {}}
+        # Add suggested fix if available
+        if suggested_fix:
+            response["suggested_fix"] = suggested_fix
+        
+        return response
     
     def is_mmdc_installed(self) -> bool:
         """Check if mmdc (Mermaid CLI) is installed.

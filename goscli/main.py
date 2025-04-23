@@ -264,8 +264,8 @@ ProviderOption = Annotated[
 
 # Indonesian language option
 IndonesianOption = Annotated[
-    Optional[bool],
-    typer.Option("--indonesian", "-i", help="Enable Indonesian responses (with English reasoning if CoT is needed).")
+    bool,
+    typer.Option("--indonesian", "-i", is_flag=True, help="Enable Indonesian responses (with English reasoning if CoT is needed).")
 ]
 
 @app.command()
@@ -276,20 +276,19 @@ def analyze(
                                       help="Path to the file to analyze.")],
     prompt: Annotated[str, typer.Argument(help="The analysis prompt for the AI.")],
     provider: ProviderOption = None,
-    indonesian: IndonesianOption = None,
+    indonesian: IndonesianOption = False,
 ):
     """Analyze a file using an AI prompt with a specific provider."""
     # Set Indonesian mode if specified
-    if indonesian is not None:
-        try:
-            logger.info(f"Setting indonesian flag via analyze command: {indonesian}")
-            set_config('indonesian', indonesian)
-            logger.info(f"Indonesian response mode set to: {indonesian}")
-            # Add more detailed logging to debug
-            logger.debug(f"After setting config, use_indonesian() returns: {use_indonesian()}")
-        except Exception as e:
-            logger.error(f"Error setting indonesian flag in analyze command: {e}", exc_info=True)
-            _dependencies['ui'].display_error(f"Error setting language preference: {e}")
+    try:
+        logger.info(f"Setting indonesian flag via analyze command: {indonesian}")
+        set_config('indonesian', indonesian)
+        logger.info(f"Indonesian response mode set to: {indonesian}")
+        # Add more detailed logging to debug
+        logger.debug(f"After setting config, use_indonesian() returns: {use_indonesian()}")
+    except Exception as e:
+        logger.error(f"Error setting indonesian flag in analyze command: {e}", exc_info=True)
+        _dependencies['ui'].display_error(f"Error setting language preference: {e}")
     
     handler: CommandHandler = _dependencies['command_handler']
     # TODO: Select the correct AI model in handler based on provider flag
@@ -323,53 +322,35 @@ def list_models_command(
 def main_callback(
     ctx: typer.Context,
     indonesian: Annotated[
-        Optional[bool],
-        typer.Option("--indonesian", "-i", help="Enable Indonesian responses (with English reasoning if CoT is needed).")
-    ] = None,
+        bool,
+        typer.Option("--indonesian", "-i", is_flag=True, help="Enable Indonesian responses (with English reasoning if CoT is needed).")
+    ] = False,
 ):
     """Main entry point. Starts chat if no command is given."""
     # Set Indonesian mode if specified
     logger.debug(f"main_callback called, indonesian flag: {indonesian}, type: {type(indonesian)}")
     
-    if indonesian is not None:
-        logger.info(f"User specified --indonesian flag with value: {indonesian}")
-        # Before setting, log the current value in config if any
-        try:
-            # Fixed parameter name from 'fallback' to 'default'
-            current_value = get_config("indonesian", default=None)
-            logger.debug(f"Current indonesian config before setting: {current_value}, type: {type(current_value)}")
-        except Exception as e:
-            logger.error(f"Error getting current indonesian config: {e}")
+    try:
+        # Set the new value in configuration
+        logger.debug(f"Calling set_config with indonesian={indonesian}")
+        set_config("indonesian", indonesian)
+        logger.info(f"Indonesian response mode set to: {indonesian}")
+    except Exception as e:
+        logger.error(f"Error setting indonesian config: {e}")
+    
+    try:
+        # Verify the config was updated correctly
+        updated_value = get_config("indonesian", default=False)
+        logger.debug(f"Updated indonesian config after setting: {updated_value}, type: {type(updated_value)}")
         
-        try:
-            # Set the new value in configuration
-            logger.debug(f"Calling set_config with indonesian={indonesian}")
-            set_config("indonesian", indonesian)
-            logger.info(f"Indonesian response mode set to: {indonesian}")
-        except Exception as e:
-            logger.error(f"Error setting indonesian config: {e}")
+        # Check if use_indonesian() returns the expected value
+        indonesian_mode_enabled = use_indonesian()
+        logger.debug(f"use_indonesian() returns: {indonesian_mode_enabled}")
         
-        try:
-            # Verify the config was updated correctly
-            updated_value = get_config("indonesian", default=None)
-            logger.debug(f"Updated indonesian config after setting: {updated_value}, type: {type(updated_value)}")
-            
-            # Check if use_indonesian() returns the expected value
-            indonesian_mode_enabled = use_indonesian()
-            logger.debug(f"use_indonesian() returns: {indonesian_mode_enabled}")
-            
-            if indonesian_mode_enabled != bool(indonesian):
-                logger.warning(f"Indonesian mode mismatch: flag={indonesian}, use_indonesian()={indonesian_mode_enabled}")
-        except Exception as e:
-            logger.error(f"Error verifying indonesian config update: {e}")
-    else:
-        logger.debug("No indonesian flag specified, using default configuration")
-        # Log the default value that will be used
-        try:
-            default_value = use_indonesian()
-            logger.debug(f"Default indonesian mode: {default_value}")
-        except Exception as e:
-            logger.error(f"Error getting default indonesian mode: {e}")
+        if indonesian_mode_enabled != bool(indonesian):
+            logger.warning(f"Indonesian mode mismatch: flag={indonesian}, use_indonesian()={indonesian_mode_enabled}")
+    except Exception as e:
+        logger.error(f"Error verifying indonesian config update: {e}")
     
     if ctx.invoked_subcommand is None:
         logger.info("No command invoked, starting interactive chat mode.")

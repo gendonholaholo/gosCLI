@@ -189,12 +189,92 @@ class ChatService:
         is_indonesian = use_indonesian()
         logger.debug(f"Indonesian mode in Mermaid diagram processing: {is_indonesian}")
         
+        # Check if @gosdiag tag was explicitly used in the content
+        has_gosdiag_tag = "@gosdiag" in content
+        logger.debug(f"@gosdiag tag detected in content: {has_gosdiag_tag}")
+        
         # Detect Mermaid blocks in the content
         mermaid_blocks = self.mermaid_generator.detect_mermaid_blocks(content)
         
         if not mermaid_blocks:
             logger.debug("No Mermaid diagrams detected in content")
-            return
+            
+            # If @gosdiag tag is present but no valid mermaid blocks were detected
+            if has_gosdiag_tag:
+                logger.info("@gosdiag tag found but no valid Mermaid syntax detected")
+                
+                # Prepare question text based on language mode
+                question_text = "You've used the @gosdiag tag, but I couldn't detect valid Mermaid diagram syntax. Would you like me to help create a diagram from your message content?"
+                if is_indonesian:
+                    question_text = "Anda telah menggunakan tag @gosdiag, tetapi saya tidak dapat mendeteksi sintaks diagram Mermaid yang valid. Apakah Anda ingin saya membantu membuat diagram dari konten pesan Anda?"
+                
+                # Ask if the user wants to create a diagram from the current conversation
+                try:
+                    user_choice = self.ui.ask_yes_no_question(question_text)
+                    logger.debug(f"User choice to create diagram from content: {user_choice}")
+                    
+                    if user_choice:
+                        # Display thinking indicator for diagram generation
+                        thinking_text = "Analyzing your message to generate a Mermaid diagram..."
+                        if is_indonesian:
+                            thinking_text = "Menganalisis pesan Anda untuk membuat diagram Mermaid..."
+                        
+                        self.ui.display_thinking(message=thinking_text)
+                        
+                        # Prepare a prompt to generate Mermaid syntax based on user content
+                        # Extract text without the @gosdiag tag for more clarity
+                        content_without_tag = content.replace("@gosdiag", "").strip()
+                        
+                        # Create a prompt for the AI to generate a Mermaid diagram
+                        generate_prompt = [
+                            {"role": "system", "content": "You are an expert in Mermaid diagram creation. Given a user's text, create an appropriate Mermaid diagram that visualizes the key concepts. Return ONLY the Mermaid code without explanation."},
+                            {"role": "user", "content": f"Create a Mermaid diagram for the following content. Return ONLY the valid Mermaid syntax without any explanation:\n\n{content_without_tag}"}
+                        ]
+                        
+                        # Call AI to generate Mermaid syntax
+                        response = await self._call_ai_with_retry(generate_prompt)
+                        
+                        if response and hasattr(response, 'content'):
+                            generated_mermaid = response.content
+                            logger.debug(f"Generated Mermaid syntax of length: {len(generated_mermaid)}")
+                            
+                            # Validate the generated syntax 
+                            validation_result = self.mermaid_generator.validate_mermaid_syntax(generated_mermaid)
+                            
+                            if validation_result.get('valid', False):
+                                # If syntax is valid, add it to mermaid_blocks and proceed with generation
+                                mermaid_blocks = [generated_mermaid]
+                                
+                                # Display the generated Mermaid code to the user
+                                preview_text = "I've generated this Mermaid diagram for you:"
+                                if is_indonesian:
+                                    preview_text = "Saya telah membuat diagram Mermaid ini untuk Anda:"
+                                
+                                self.ui.display_info(f"{preview_text}\n\n```mermaid\n{generated_mermaid}\n```")
+                            else:
+                                # If validation failed, show error
+                                error_text = f"I couldn't generate a valid Mermaid diagram. The syntax validation failed: {validation_result.get('errors', ['Unknown error'])}"
+                                if is_indonesian:
+                                    error_text = f"Saya tidak dapat membuat diagram Mermaid yang valid. Validasi sintaks gagal: {validation_result.get('errors', ['Kesalahan tidak diketahui'])}"
+                                
+                                self.ui.display_error(error_text)
+                                return
+                        else:
+                            # If AI response failed, show error
+                            error_text = "I couldn't generate a Mermaid diagram from your content."
+                            if is_indonesian:
+                                error_text = "Saya tidak dapat membuat diagram Mermaid dari konten Anda."
+                            
+                            self.ui.display_error(error_text)
+                            return
+                    else:
+                        return
+                except Exception as e:
+                    logger.error(f"Error in diagram generation logic: {e}", exc_info=True)
+                    return
+            else:
+                # No @gosdiag tag and no mermaid blocks
+                return
         
         logger.info(f"Found {len(mermaid_blocks)} Mermaid diagram(s) in content")
         logger.debug(f"Operating system: {os.name}, Platform: {sys.platform}")

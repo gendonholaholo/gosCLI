@@ -48,7 +48,9 @@ class LanguageProcessor:
         Returns:
             Enhanced system prompt
         """
-        if not use_indonesian():
+        indonesian_enabled = use_indonesian()
+        logger.debug(f"[DEBUG LOG] Inside enhance_system_prompt: use_indonesian() returned: {indonesian_enabled}")
+        if not indonesian_enabled:
             logger.debug("Indonesian mode disabled - not enhancing system prompt")
             return prompt
             
@@ -80,6 +82,8 @@ class LanguageProcessor:
             return messages
             
         logger.debug(f"Preprocessing {len(messages)} messages")
+        indonesian_enabled = use_indonesian()
+        logger.debug(f"[DEBUG LOG] In preprocess_messages: use_indonesian() returned: {indonesian_enabled}")
         
         processed = []
         for msg in messages:
@@ -92,7 +96,7 @@ class LanguageProcessor:
             processed_msg = msg.copy()
             
             # Enhance system messages with Indonesian instructions
-            if msg.get("role") == "system" and use_indonesian():
+            if msg.get("role") == "system" and indonesian_enabled:
                 logger.debug("Enhancing system message with Indonesian instructions")
                 processed_msg["content"] = self.enhance_system_prompt(msg.get("content", ""))
                 
@@ -138,9 +142,12 @@ class LanguageProcessor:
             logger.debug(f"Content is not a string but of type: {type(content)}")
             
         # Check if we need to translate
-        if use_indonesian() and self.translation_service:
+        use_indonesian_setting = use_indonesian()
+        logger.debug(f"[DEBUG LOG] In postprocess_response: use_indonesian() returned: {use_indonesian_setting}")
+        
+        if use_indonesian_setting and self.translation_service:
             try:
-                logger.debug("Translating response to Indonesian")
+                logger.debug(f"[DEBUG LOG] About to translate response to Indonesian, response type: {type(response)}")
                 preserve_english_reasoning = get_cot_in_english()
                 logger.debug(f"Preserving English reasoning: {preserve_english_reasoning}")
                 
@@ -150,7 +157,7 @@ class LanguageProcessor:
                         content,
                         preserve_english_reasoning=preserve_english_reasoning
                     )
-                    logger.debug("Translation completed")
+                    logger.debug(f"[DEBUG LOG] Translation completed. Original length: {len(content)}, Translated length: {len(translated_content)}")
                     
                     # If original was a structured response, update its content
                     if hasattr(response, 'content'):
@@ -165,5 +172,7 @@ class LanguageProcessor:
             except Exception as e:
                 logger.error(f"Translation error during postprocessing: {e}")
                 logger.warning("Using original response due to translation failure")
+        else:
+            logger.debug(f"[DEBUG LOG] Skipping translation: use_indonesian={use_indonesian_setting}, has_translation_service={self.translation_service is not None}")
                 
         return response 

@@ -54,7 +54,9 @@ class TranslationService:
             return text
             
         # Skip translation if Indonesian is disabled (safety check)
-        if not use_indonesian():
+        indonesian_enabled = use_indonesian()
+        logger.debug(f"[DEBUG LOG] In translate_to_indonesian: use_indonesian() returned: {indonesian_enabled}")
+        if not indonesian_enabled:
             logger.debug("Indonesian mode is disabled - skipping translation")
             return text
             
@@ -102,16 +104,18 @@ class TranslationService:
                 ]
                 
                 # Get the translation from the AI model
+                logger.debug(f"[DEBUG LOG] Sending translation request using AI model of type: {type(self.ai_model)}")
                 response = self.ai_model.generate_content(messages)
                 translated_text = response.content
                 
                 logger.debug(f"AI translation complete. Original: {len(text)} chars, Translated: {len(translated_text)} chars")
+                logger.debug(f"[DEBUG LOG] First 100 chars of translated text: {translated_text[:100] if translated_text and len(translated_text) > 0 else 'EMPTY'}")
                 return translated_text
             except Exception as e:
                 logger.error(f"AI translation failed: {e}")
                 logger.debug("Falling back to direct translation")
         else:
-            logger.debug("No AI model available, using fallback translation")
+            logger.debug("[DEBUG LOG] No AI model available for translation, using fallback translation")
             
         # Fallback to direct translation for common phrases
         return self._fallback_direct_translation(text)
@@ -236,6 +240,7 @@ class TranslationService:
         indicates that a fallback was used.
         """
         logger.warning("Using fallback translation method")
+        logger.debug(f"[DEBUG LOG] Fallback translation for text of length: {len(text)}")
         
         # Simple dictionary-based translation for common phrases
         # This is very limited but better than nothing as a fallback

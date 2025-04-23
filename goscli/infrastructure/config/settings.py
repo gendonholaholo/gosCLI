@@ -232,6 +232,11 @@ def use_indonesian() -> bool:
         else:
             logger.warning(f"Unexpected string value for indonesian flag: '{flag}'. Defaulting to False.")
             return False
+    
+    # Convert None to False (when the flag is passed without a value)
+    if flag is None:
+        logger.debug("Indonesian flag is None, treating as False")
+        return False
             
     return bool(flag)
 
